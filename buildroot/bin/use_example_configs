@@ -128,7 +128,7 @@ def main():
         subprocess.run(['restore_configs'], check=True)
     except FileNotFoundError:
         try:
-            subprocess.run(['restore_configs'], check=True)
+            subprocess.run(['./buildroot/bin/restore_configs'], check=True)
         except FileNotFoundError:
             print("restore_configs not found, skipping.")
 
