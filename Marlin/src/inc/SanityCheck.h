@@ -867,6 +867,16 @@ static_assert(COUNT(arm) == LOGICAL_AXES, "AXIS_RELATIVE_MODES must contain " _L
 #endif // LIN_ADVANCE
 
 /**
+ * S_CURVE_ACCELERATION
+ */
+#if ENABLED(S_CURVE_ACCELERATION) && defined(S_CURVE_FACTOR)
+  #ifdef __AVR__
+    #error "S_CURVE_FACTOR is not yet implemented for AVR. Disable it to continue."
+  #endif
+  static_assert(WITHIN(S_CURVE_FACTOR, 0, 1), "S_CURVE_FACTOR must be between 0.0 and 1.0.");
+#endif
+
+/**
  * Linear Advance and FT Motion - Check K value range
  */
 #if HAS_LIN_ADVANCE_K
