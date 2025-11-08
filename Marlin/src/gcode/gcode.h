@@ -883,7 +883,7 @@ private:
     #endif
   #endif
 
-  #if DISABLED(NO_VOLUMETRICS)
+  #if HAS_VOLUMETRIC_EXTRUSION
     static void M200();
     static void M200_report(const bool forReplay=true);
   #endif

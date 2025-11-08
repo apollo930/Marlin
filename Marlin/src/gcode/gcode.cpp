@@ -717,7 +717,7 @@ void GcodeSuite::process_parsed_command(bool no_ok/*=false*/) {
         #endif
       #endif
 
-      #if DISABLED(NO_VOLUMETRICS)
+      #if HAS_VOLUMETRIC_EXTRUSION
         case 200: M200(); break;                                  // M200: Set filament diameter, E to cubic units
       #endif
 
