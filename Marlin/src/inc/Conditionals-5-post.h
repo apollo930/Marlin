@@ -3687,4 +3687,10 @@
     #define FTM_BUFFER_SIZE 128
   #endif
   #define FTM_BUFFER_MASK (FTM_BUFFER_SIZE - 1u)
+  #if ANY(BIQU_MICROPROBE_V1, BIQU_MICROPROBE_V2)
+    #ifndef PROBE_WAKEUP_TIME_MS
+      #define PROBE_WAKEUP_TIME_MS 30
+      #define PROBE_WAKEUP_TIME_WARNING 1
+    #endif
+  #endif
 #endif
