@@ -25,6 +25,8 @@
 //
 
 #include "../../inc/MarlinConfigPre.h"
+int8_t syringe_volume_ml = 5; // default 5 mL
+float mm_per_ml = 5.0f; // Conversion factor (adjust as needed)
 
 #if HAS_MARLINUI_MENU
 
@@ -34,6 +36,7 @@
 #include "../../module/printcounter.h"
 #include "../../module/stepper.h"
 #include "../../sd/cardreader.h"
+
 
 #if ENABLED(PSU_CONTROL)
   #include "../../feature/power.h"
@@ -66,6 +69,8 @@
   #include "../../feature/repeat.h"
 #endif
 
+
+void menu_main();
 void menu_tune();
 void menu_cancelobject();
 void menu_motion();
@@ -233,6 +238,18 @@ void menu_configuration();
   }
 
 #endif // CUSTOM_MENU_MAIN
+
+void menu_syringe_pull() {
+  START_MENU();
+  BACK_ITEM(MSG_MAIN_MENU); // Go back to main menu
+  
+  EDIT_ITEM_F(int8, F("Volume (mL)"), &syringe_volume_ml, 1, 20);
+  
+  // Display current volume setting
+  STATIC_ITEM_F(F("Pull Volume Set"));
+  
+  END_MENU();
+}
 
 void menu_main() {
   const bool busy = printingIsActive();
@@ -446,6 +463,8 @@ void menu_main() {
     // the print, so MMU menus are required for MMU3.
     if (TERN1(HAS_PRUSA_MMU2, !busy)) SUBMENU(MSG_MMU2_MENU, menu_mmu2);
   #endif
+
+  SUBMENU_F(F("Syringe Pull"), menu_syringe_pull); // New submenu
 
   SUBMENU(MSG_CONFIGURATION, menu_configuration);
 
