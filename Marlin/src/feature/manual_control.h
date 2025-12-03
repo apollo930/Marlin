@@ -24,6 +24,12 @@ void manual_disable_steppers();
 void manual_adc_control_y();
 void process_manual_command(const char* command);
 
+// Menu integration functions
+void menu_manual_control();
+bool get_adc_control_active();
+void set_adc_control_active(bool active);
+void reset_adc_position();
+
 // Utility functions
 float calculate_resistance(float voltage, float pullup_resistance = 4700.0f);
 uint16_t parse_steps(const char* command, uint16_t defaultSteps);

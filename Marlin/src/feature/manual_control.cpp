@@ -385,4 +385,162 @@ void manual_control_init() {
   SERIAL_ECHOLNPGM("Examples: x+200, y-50, z+5, e+100 (type 'help' for full list)");
 }
 
+// Access functions for menu integration
+bool get_adc_control_active() {
+  return adc_control_active;
+}
+
+void set_adc_control_active(bool active) {
+  adc_control_active = active;
+  if (active) {
+    manual_enable_steppers();
+    SERIAL_ECHOLNPGM("ADC Position Control ENABLED via LCD");
+  } else {
+    SERIAL_ECHOLNPGM("ADC Position Control DISABLED via LCD");
+  }
+}
+
+void reset_adc_position() {
+  adc_current_position = 0;
+  SERIAL_ECHOLNPGM("Current position reset to zero via LCD");
+}
+
+#if HAS_MARLINUI_MENU
+
+#include "../lcd/menu/menu_item.h"
+
+// Menu variables for stepper movement
+static uint16_t manual_move_steps = 100;
+static uint16_t manual_z_steps = 10;
+static uint16_t manual_e_steps = 50;
+
+// Menu actions for thermistor reading
+void action_read_hotend() {
+  manual_read_hotend_thermistor();
+  ui.completion_feedback();
+}
+
+void action_read_bed() {
+  manual_read_bed_thermistor();
+  ui.completion_feedback();
+}
+
+// Menu actions for stepper control
+void action_enable_steppers() {
+  manual_enable_steppers();
+  ui.completion_feedback();
+}
+
+void action_disable_steppers() {
+  manual_disable_steppers();
+  ui.completion_feedback();
+}
+
+// Menu actions for axis movement
+void action_move_x_plus() {
+  manual_move_axis(X_STEP_PIN, X_DIR_PIN, true, manual_move_steps);
+  ui.completion_feedback();
+}
+
+void action_move_x_minus() {
+  manual_move_axis(X_STEP_PIN, X_DIR_PIN, false, manual_move_steps);
+  ui.completion_feedback();
+}
+
+void action_move_y_plus() {
+  manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, true, manual_move_steps);
+  ui.completion_feedback();
+}
+
+void action_move_y_minus() {
+  manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, manual_move_steps);
+  ui.completion_feedback();
+}
+
+void action_move_z_plus() {
+  manual_move_axis(Z_STEP_PIN, Z_DIR_PIN, true, manual_z_steps);
+  ui.completion_feedback();
+}
+
+void action_move_z_minus() {
+  manual_move_axis(Z_STEP_PIN, Z_DIR_PIN, false, manual_z_steps);
+  ui.completion_feedback();
+}
+
+void action_move_e_plus() {
+  manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, true, manual_e_steps);
+  ui.completion_feedback();
+}
+
+void action_move_e_minus() {
+  manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, false, manual_e_steps);
+  ui.completion_feedback();
+}
+
+// ADC control actions
+void action_toggle_adc_control() {
+  set_adc_control_active(!get_adc_control_active());
+  ui.completion_feedback();
+}
+
+void action_reset_adc_position() {
+  reset_adc_position();
+  ui.completion_feedback();
+}
+
+// Manual Control Menu
+void menu_manual_control() {
+  START_MENU();
+  BACK_ITEM(MSG_MAIN_MENU);
+  
+  // Thermistor readings
+  STATIC_ITEM_F(F("=== Thermistors ==="));
+  ACTION_ITEM_F(F("Read Hotend"), action_read_hotend);
+  ACTION_ITEM_F(F("Read Bed"), action_read_bed);
+  
+  // Stepper control
+  STATIC_ITEM_F(F("=== Steppers ==="));
+  ACTION_ITEM_F(F("Enable Steppers"), action_enable_steppers);
+  ACTION_ITEM_F(F("Disable Steppers"), action_disable_steppers);
+  
+  // Movement settings
+  STATIC_ITEM_F(F("=== Movement ==="));
+  EDIT_ITEM_F(uint16_3, F("XY Steps"), &manual_move_steps, 1, 1000);
+  EDIT_ITEM_F(uint16_3, F("Z Steps"), &manual_z_steps, 1, 100);
+  EDIT_ITEM_F(uint16_3, F("E Steps"), &manual_e_steps, 1, 500);
+  
+  // X axis movement
+  STATIC_ITEM_F(F("--- X Axis ---"));
+  ACTION_ITEM_F(F("X +"), action_move_x_plus);
+  ACTION_ITEM_F(F("X -"), action_move_x_minus);
+  
+  // Y axis movement  
+  STATIC_ITEM_F(F("--- Y Axis ---"));
+  ACTION_ITEM_F(F("Y +"), action_move_y_plus);
+  ACTION_ITEM_F(F("Y -"), action_move_y_minus);
+  
+  // Z axis movement
+  STATIC_ITEM_F(F("--- Z Axis ---"));
+  ACTION_ITEM_F(F("Z +"), action_move_z_plus);
+  ACTION_ITEM_F(F("Z -"), action_move_z_minus);
+  
+  // E axis movement
+  STATIC_ITEM_F(F("--- Extruder ---"));
+  ACTION_ITEM_F(F("E +"), action_move_e_plus);
+  ACTION_ITEM_F(F("E -"), action_move_e_minus);
+  
+  // ADC position control
+  STATIC_ITEM_F(F("=== ADC Control ==="));
+  if (get_adc_control_active()) {
+    ACTION_ITEM_F(F("Disable ADC"), action_toggle_adc_control);
+  } else {
+    ACTION_ITEM_F(F("Enable ADC"), action_toggle_adc_control);
+  }
+  ACTION_ITEM_F(F("Reset Position"), action_reset_adc_position);
+  
+  END_MENU();
+}
+
+#endif // HAS_MARLINUI_MENU
+
 #endif // MANUAL_CONTROL_MODE

@@ -251,6 +251,10 @@ void menu_syringe_pull() {
   END_MENU();
 }
 
+#if ENABLED(MANUAL_CONTROL_MODE)
+  #include "../../feature/manual_control.h"
+#endif
+
 void menu_main() {
   const bool busy = printingIsActive();
   #if HAS_MEDIA
@@ -465,6 +469,10 @@ void menu_main() {
   #endif
 
   SUBMENU_F(F("Syringe Pull"), menu_syringe_pull); // New submenu
+
+  #if ENABLED(MANUAL_CONTROL_MODE)
+    SUBMENU_F(F("Manual Control"), menu_manual_control);
+  #endif
 
   SUBMENU(MSG_CONFIGURATION, menu_configuration);
 
