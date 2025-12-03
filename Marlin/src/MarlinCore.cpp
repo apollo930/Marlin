@@ -100,6 +100,8 @@
   #include "feature/host_actions.h"
 #endif
 
+
+
 #if HAS_BEEPER
   #include "libs/buzzer.h"
 #endif
@@ -267,6 +269,10 @@
 
 #if HAS_RS485_SERIAL
   #include "feature/rs485.h"
+#endif
+
+#if ENABLED(MANUAL_CONTROL_MODE)
+  #include "feature/manual_control.h"
 #endif
 
 #if !HAS_MEDIA
@@ -1140,6 +1146,7 @@ inline void tmc_standby_setup() {
  *  - Open Touch Screen Calibration screen, if not calibrated
  *  - Set Marlin to RUNNING State
  */
+
 void setup() {
   #ifdef FASTIO_INIT
     FASTIO_INIT();
@@ -1701,6 +1708,10 @@ void setup() {
     for (uint8_t i = 0; i < COUNT(tune) - 1; i += 2) BUZZ(tune[i + 1], tune[i]);
   #endif
 
+  #if ENABLED(MANUAL_CONTROL_MODE)
+    SETUP_RUN(manual_control_init());
+  #endif
+
   SETUP_LOG("setup() completed.");
 
   TERN_(MARLIN_TEST_BUILD, runStartupTests());
@@ -1729,6 +1740,10 @@ void loop() {
     #endif
 
     queue.advance();
+
+    #if ENABLED(MANUAL_CONTROL_MODE)
+      manual_control_task();
+    #endif
 
     #if ANY(POWER_OFF_TIMER, POWER_OFF_WAIT_FOR_COOLDOWN)
       powerManager.checkAutoPowerOff();
