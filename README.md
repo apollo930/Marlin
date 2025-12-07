@@ -80,7 +80,7 @@ The LCD menu provides easy access to:
 
 - Median filtering (8-sample buffer) for noise reduction
 - Proportional control with configurable range
-- Configurable position range (default: ±3200 steps)
+- Configurable position range (default: ±33000 steps, ~2×10^4 steps/V)
 - Real-time feedback via serial output
 
 ## Building

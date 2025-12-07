@@ -35,7 +35,8 @@ static bool adc_control_active = false;
 static int32_t adc_current_position = 0;  // Current Y position in steps
 static int32_t adc_target_position = 0;   // Target Y position in steps
 static uint16_t adc_range = 4095;         // Full ADC range (0-4095)
-static int32_t position_range = 6400;     // Position range in steps (±3200 = ±1 full revolution)
+// Position range in steps; 66000 => ~2e4 steps per volt over 3.3V range
+static int32_t position_range = 66000;     // ±33000 default range
 static uint32_t last_adc_move = 0;        // Timing control
 
 // ADC averaging variables
@@ -436,7 +437,7 @@ void process_manual_command(const char* command) {
         new_range = new_range * 10 + (*numStart - '0');
         numStart++;
       }
-      if (new_range > 0 && new_range <= 50000) {
+      if (new_range > 0 && new_range <= 100000) {
         position_range = new_range;
         SERIAL_ECHO("Position range set to ±");
         SERIAL_ECHOLN(position_range/2);
@@ -465,7 +466,7 @@ void process_manual_command(const char* command) {
     SERIAL_ECHOLNPGM("adc_on - Enable ADC position control");
     SERIAL_ECHOLNPGM("adc_off - Disable ADC position control");
     SERIAL_ECHOLNPGM("adc_zero - Reset current position to zero");
-    SERIAL_ECHOLNPGM("adc_range[value] - Set position range");
+    SERIAL_ECHOLNPGM("adc_range[value] - Set position range (default 66000 => ±33000)");
   }
   else if (strlen(command) > 0) {
     SERIAL_ECHO("Unknown command: ");
