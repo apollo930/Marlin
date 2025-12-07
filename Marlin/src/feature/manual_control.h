@@ -21,6 +21,8 @@ void manual_read_bed_thermistor();
 void manual_move_axis(pin_t step_pin, pin_t dir_pin, bool direction, uint16_t steps);
 void manual_enable_steppers();
 void manual_disable_steppers();
+void test_limit_switch_only();
+void test_z_limit_switch();
 void manual_adc_control_y();
 void process_manual_command(const char* command);
 

@@ -37,6 +37,9 @@ float mm_per_ml = 5.0f; // Conversion factor (adjust as needed)
 #include "../../module/stepper.h"
 #include "../../sd/cardreader.h"
 
+#if ENABLED(MANUAL_CONTROL_MODE)
+  #include "../../feature/manual_control.h"
+#endif
 
 #if ENABLED(PSU_CONTROL)
   #include "../../feature/power.h"
@@ -248,11 +251,58 @@ void menu_syringe_pull() {
   // Display current volume setting
   STATIC_ITEM_F(F("Pull Volume Set"));
   
+  // Add action items for syringe operations
+  ACTION_ITEM_F(F("Pull Syringe"), []() {
+    #if ENABLED(MANUAL_CONTROL_MODE)
+      // Calculate steps based on volume (approximate conversion)
+      uint16_t steps = syringe_volume_ml * 100; // Adjust multiplier as needed
+      ui.set_status(F("Pulling syringe..."));
+      manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, true, steps);
+      ui.set_status(F("Pull complete!"));
+    #else
+      ui.set_status(F("Manual control disabled"));
+    #endif
+  });
+  
+  ACTION_ITEM_F(F("Push Syringe"), []() {
+    #if ENABLED(MANUAL_CONTROL_MODE)
+      // Calculate steps based on volume (approximate conversion)
+      uint16_t steps = syringe_volume_ml * 100; // Adjust multiplier as needed
+      ui.set_status(F("Pushing syringe..."));
+      manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, false, steps);
+      ui.set_status(F("Push complete!"));
+    #else
+      ui.set_status(F("Manual control disabled"));
+    #endif
+  });
+  
+  // Add a test action to verify the menu is working
+  ACTION_ITEM_F(F("Test Action"), []() {
+    ui.set_status(F("Menu action works!"));
+  });
+  
+  // Toggle steppers on/off
+  ACTION_ITEM_F(F("Toggle Steppers"), []() {
+    #if ENABLED(MANUAL_CONTROL_MODE)
+      static bool steppers_enabled = false;
+      steppers_enabled = !steppers_enabled;
+      if (steppers_enabled) {
+        manual_enable_steppers();
+        ui.set_status(F("Steppers ON"));
+      } else {
+        manual_disable_steppers();
+        ui.set_status(F("Steppers OFF"));
+      }
+    #else
+      ui.set_status(F("Manual control disabled"));
+    #endif
+  });
+  
   END_MENU();
 }
 
 #if ENABLED(MANUAL_CONTROL_MODE)
-  #include "../../feature/manual_control.h"
+  void menu_manual_control(); // Forward declaration
 #endif
 
 void menu_main() {

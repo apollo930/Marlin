@@ -15,6 +15,21 @@
 #include "../core/serial.h"
 #include "../pins/pins.h"
 
+#if HAS_MARLINUI_MENU
+  #include "../lcd/marlinui.h"
+#endif
+
+// Limit switch interrupt variables
+static volatile bool limit_switch_triggered = false;
+static volatile uint32_t limit_switch_timestamp = 0;
+
+// Interrupt handler for limit switch
+void limit_switch_isr() {
+  // Trigger on rising edge (LOW to HIGH transition)
+  limit_switch_triggered = true;
+  limit_switch_timestamp = millis();
+}
+
 // ADC position control variables
 static bool adc_control_active = false;
 static int32_t adc_current_position = 0;  // Current Y position in steps
@@ -109,6 +124,10 @@ void manual_move_axis(pin_t step_pin, pin_t dir_pin, bool direction, uint16_t st
   }
   
   SERIAL_ECHOLNPGM("Move complete");
+  
+  #if HAS_MARLINUI_MENU
+    ui.set_status(F("Move complete"));
+  #endif
 }
 
 void manual_enable_steppers() {
@@ -119,6 +138,116 @@ void manual_enable_steppers() {
 void manual_disable_steppers() {
   WRITE(X_ENABLE_PIN, HIGH);
   SERIAL_ECHOLNPGM("Steppers DISABLED - Manual movement allowed");
+}
+
+void test_limit_switch_only() {
+  SERIAL_ECHOLNPGM("Testing limit switch on X_STOP_PIN (PA11)...");
+  SERIAL_ECHO("Current state: ");
+  
+  if (READ(X_STOP_PIN) == HIGH) {
+    SERIAL_ECHOLNPGM("HIGH (not pressed)");
+  } else {
+    SERIAL_ECHOLNPGM("LOW (pressed/triggered)");
+  }
+  
+  SERIAL_ECHOLNPGM("Monitoring for 10 seconds (press Ctrl+C to stop)...");
+  
+  for (uint8_t i = 0; i < 100; i++) {
+    static bool last_state = HIGH;
+    bool current_state = READ(X_STOP_PIN);
+    
+    if (current_state != last_state) {
+      SERIAL_ECHO("State changed to: ");
+      SERIAL_ECHOLNPGM(current_state == HIGH ? "HIGH (released)" : "LOW (pressed)");
+      last_state = current_state;
+    }
+    
+    delay(100);
+    hal.watchdog_refresh();
+  }
+  
+  SERIAL_ECHOLNPGM("Limit switch test complete!");
+}
+
+void test_z_limit_switch() {
+  SERIAL_ECHOLNPGM("Starting Z limit switch test with interrupt...");
+  
+  // Reset interrupt flag
+  limit_switch_triggered = false;
+  
+  // Enable steppers
+  WRITE(X_ENABLE_PIN, LOW);
+  DELAY_US(100);
+  
+  // Set direction - anticlockwise (false = reverse direction)
+  WRITE(Z_DIR_PIN, LOW);
+  DELAY_US(100);
+  
+  // Move until limit switch interrupt is triggered
+  uint16_t step_count = 0;
+  const uint16_t max_steps = 50000; // Safety limit
+  
+  SERIAL_ECHOLNPGM("Moving Z anticlockwise until limit switch interrupt...");
+  
+  while (!limit_switch_triggered && step_count < max_steps) {
+    WRITE(Z_STEP_PIN, HIGH);
+    DELAY_US(100);
+    WRITE(Z_STEP_PIN, LOW);
+    DELAY_US(400);
+    
+    step_count++;
+    
+    // Watchdog refresh and status update every 100 steps
+    if (step_count % 100 == 0) {
+      hal.watchdog_refresh();
+      if (step_count % 500 == 0) {
+        SERIAL_ECHO("Steps: ");
+        SERIAL_ECHOLN(step_count);
+      }
+    }
+  }
+  
+  if (limit_switch_triggered) {
+    SERIAL_ECHO("Limit switch triggered after ");
+    SERIAL_ECHO(step_count);
+    SERIAL_ECHOLNPGM(" steps!");
+    SERIAL_ECHO("Interrupt timestamp: ");
+    SERIAL_ECHOLN(limit_switch_timestamp);
+  } else {
+    SERIAL_ECHOLNPGM("WARNING: Max steps reached without hitting limit switch!");
+  }
+  
+  // Wait 1 second
+  SERIAL_ECHOLNPGM("Waiting 1 second...");
+  delay(1000);
+  
+  // Move back (clockwise)
+  WRITE(Z_DIR_PIN, HIGH);
+  DELAY_US(100);
+  
+  SERIAL_ECHO("Moving back ");
+  SERIAL_ECHO(step_count);
+  SERIAL_ECHOLNPGM(" steps...");
+  
+  for (uint16_t i = 0; i < step_count; i++) {
+    WRITE(Z_STEP_PIN, HIGH);
+    DELAY_US(100);
+    WRITE(Z_STEP_PIN, LOW);
+    DELAY_US(400);
+    
+    if (i % 100 == 0) {
+      hal.watchdog_refresh();
+    }
+  }
+  
+  SERIAL_ECHOLNPGM("Z limit switch test complete!");
+  
+  // Reset interrupt flag
+  limit_switch_triggered = false;
+  
+  #if HAS_MARLINUI_MENU
+    ui.set_status(F("Z test complete!"));
+  #endif
 }
 
 void manual_adc_control_y() {
@@ -238,35 +367,35 @@ void process_manual_command(const char* command) {
     manual_read_bed_thermistor();
   }
   else if (strncmp(command, "x+", 2) == 0) {
-    uint16_t steps = parse_steps(command, 100);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(X_STEP_PIN, X_DIR_PIN, true, steps);  // PC2, PB9
   }
   else if (strncmp(command, "x-", 2) == 0) {
-    uint16_t steps = parse_steps(command, 100);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(X_STEP_PIN, X_DIR_PIN, false, steps);
   }
   else if (strncmp(command, "y+", 2) == 0) {
-    uint16_t steps = parse_steps(command, 100);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, true, steps);  // PB8, PB7
   }
   else if (strncmp(command, "y-", 2) == 0) {
-    uint16_t steps = parse_steps(command, 100);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, steps);
   }
   else if (strncmp(command, "z+", 2) == 0) {
-    uint16_t steps = parse_steps(command, 10);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(Z_STEP_PIN, Z_DIR_PIN, true, steps);   // PB6, PB5
   }
   else if (strncmp(command, "z-", 2) == 0) {
-    uint16_t steps = parse_steps(command, 10);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(Z_STEP_PIN, Z_DIR_PIN, false, steps);
   }
   else if (strncmp(command, "e+", 2) == 0) {
-    uint16_t steps = parse_steps(command, 50);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, true, steps); // PB4, PB3
   }
   else if (strncmp(command, "e-", 2) == 0) {
-    uint16_t steps = parse_steps(command, 50);
+    uint16_t steps = parse_steps(command, 500);
     manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, false, steps);
   }
   else if (strcmp(command, "on") == 0) {
@@ -292,6 +421,12 @@ void process_manual_command(const char* command) {
   else if (strcmp(command, "adc_zero") == 0) {
     adc_current_position = 0;
     SERIAL_ECHOLNPGM("Current position reset to zero");
+  }
+  else if (strcmp(command, "tz") == 0) {
+    test_z_limit_switch();
+  }
+  else if (strcmp(command, "ts") == 0) {
+    test_limit_switch_only();
   }
   else if (strncmp(command, "adc_range", 9) == 0) {
     const char* numStart = command + 9;
@@ -325,6 +460,8 @@ void process_manual_command(const char* command) {
     SERIAL_ECHOLNPGM("e-[steps] - Retract");
     SERIAL_ECHOLNPGM("on - Enable steppers");
     SERIAL_ECHOLNPGM("off - Disable steppers");
+    SERIAL_ECHOLNPGM("ts - Test limit switch only");
+    SERIAL_ECHOLNPGM("tz - Test Z limit switch");
     SERIAL_ECHOLNPGM("adc_on - Enable ADC position control");
     SERIAL_ECHOLNPGM("adc_off - Disable ADC position control");
     SERIAL_ECHOLNPGM("adc_zero - Reset current position to zero");
@@ -342,9 +479,7 @@ void manual_control_task() {
   static char command_buffer[32];
   static uint8_t buffer_pos = 0;
   
-  // Handle ADC-controlled Y movement
-  manual_adc_control_y();
-  
+  // Process serial first - don't let ADC blocking delays drop keypresses
   while (MYSERIAL1.available() > 0) {
     char c = MYSERIAL1.read();
     
@@ -358,6 +493,11 @@ void manual_control_task() {
     else if (c >= 32 && c <= 126 && buffer_pos < 31) { // Printable characters
       command_buffer[buffer_pos++] = c;
     }
+  }
+  
+  // Handle ADC-controlled Y movement only when serial is clear
+  if (!MYSERIAL1.available()) {
+    manual_adc_control_y();
   }
 }
 
@@ -376,10 +516,17 @@ void manual_control_init() {
   SET_INPUT_PULLUP(TEMP_0_PIN);   // PC5
   SET_INPUT_PULLUP(TEMP_BED_PIN); // PC4
   
+  // Set up limit switch pin with pullup
+  SET_INPUT_PULLUP(X_STOP_PIN);   // PA11
+  
+  // Attach interrupt to limit switch on rising edge (LOW to HIGH)
+  attachInterrupt(digitalPinToInterrupt(X_STOP_PIN), limit_switch_isr, RISING);
+  
   // Disable steppers initially
   manual_disable_steppers();
   
   SERIAL_ECHOLNPGM("Manual Control Initialized");
+  SERIAL_ECHOLNPGM("Limit switch interrupt enabled on X_STOP_PIN (PA11)");
   SERIAL_ECHOLNPGM("Commands: h, b, x+[steps], y+[steps], z+[steps], e+[steps], on, off");
   SERIAL_ECHOLNPGM("ADC Control: adc_on, adc_off, adc_zero, adc_range[value]");
   SERIAL_ECHOLNPGM("Examples: x+200, y-50, z+5, e+100 (type 'help' for full list)");
@@ -405,142 +552,6 @@ void reset_adc_position() {
   SERIAL_ECHOLNPGM("Current position reset to zero via LCD");
 }
 
-#if HAS_MARLINUI_MENU
 
-#include "../lcd/menu/menu_item.h"
-
-// Menu variables for stepper movement
-static uint16_t manual_move_steps = 100;
-static uint16_t manual_z_steps = 10;
-static uint16_t manual_e_steps = 50;
-
-// Menu actions for thermistor reading
-void action_read_hotend() {
-  manual_read_hotend_thermistor();
-  ui.completion_feedback();
-}
-
-void action_read_bed() {
-  manual_read_bed_thermistor();
-  ui.completion_feedback();
-}
-
-// Menu actions for stepper control
-void action_enable_steppers() {
-  manual_enable_steppers();
-  ui.completion_feedback();
-}
-
-void action_disable_steppers() {
-  manual_disable_steppers();
-  ui.completion_feedback();
-}
-
-// Menu actions for axis movement
-void action_move_x_plus() {
-  manual_move_axis(X_STEP_PIN, X_DIR_PIN, true, manual_move_steps);
-  ui.completion_feedback();
-}
-
-void action_move_x_minus() {
-  manual_move_axis(X_STEP_PIN, X_DIR_PIN, false, manual_move_steps);
-  ui.completion_feedback();
-}
-
-void action_move_y_plus() {
-  manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, true, manual_move_steps);
-  ui.completion_feedback();
-}
-
-void action_move_y_minus() {
-  manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, manual_move_steps);
-  ui.completion_feedback();
-}
-
-void action_move_z_plus() {
-  manual_move_axis(Z_STEP_PIN, Z_DIR_PIN, true, manual_z_steps);
-  ui.completion_feedback();
-}
-
-void action_move_z_minus() {
-  manual_move_axis(Z_STEP_PIN, Z_DIR_PIN, false, manual_z_steps);
-  ui.completion_feedback();
-}
-
-void action_move_e_plus() {
-  manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, true, manual_e_steps);
-  ui.completion_feedback();
-}
-
-void action_move_e_minus() {
-  manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, false, manual_e_steps);
-  ui.completion_feedback();
-}
-
-// ADC control actions
-void action_toggle_adc_control() {
-  set_adc_control_active(!get_adc_control_active());
-  ui.completion_feedback();
-}
-
-void action_reset_adc_position() {
-  reset_adc_position();
-  ui.completion_feedback();
-}
-
-// Manual Control Menu
-void menu_manual_control() {
-  START_MENU();
-  BACK_ITEM(MSG_MAIN_MENU);
-  
-  // Thermistor readings
-  STATIC_ITEM_F(F("=== Thermistors ==="));
-  ACTION_ITEM_F(F("Read Hotend"), action_read_hotend);
-  ACTION_ITEM_F(F("Read Bed"), action_read_bed);
-  
-  // Stepper control
-  STATIC_ITEM_F(F("=== Steppers ==="));
-  ACTION_ITEM_F(F("Enable Steppers"), action_enable_steppers);
-  ACTION_ITEM_F(F("Disable Steppers"), action_disable_steppers);
-  
-  // Movement settings
-  STATIC_ITEM_F(F("=== Movement ==="));
-  EDIT_ITEM_F(uint16_3, F("XY Steps"), &manual_move_steps, 1, 1000);
-  EDIT_ITEM_F(uint16_3, F("Z Steps"), &manual_z_steps, 1, 100);
-  EDIT_ITEM_F(uint16_3, F("E Steps"), &manual_e_steps, 1, 500);
-  
-  // X axis movement
-  STATIC_ITEM_F(F("--- X Axis ---"));
-  ACTION_ITEM_F(F("X +"), action_move_x_plus);
-  ACTION_ITEM_F(F("X -"), action_move_x_minus);
-  
-  // Y axis movement  
-  STATIC_ITEM_F(F("--- Y Axis ---"));
-  ACTION_ITEM_F(F("Y +"), action_move_y_plus);
-  ACTION_ITEM_F(F("Y -"), action_move_y_minus);
-  
-  // Z axis movement
-  STATIC_ITEM_F(F("--- Z Axis ---"));
-  ACTION_ITEM_F(F("Z +"), action_move_z_plus);
-  ACTION_ITEM_F(F("Z -"), action_move_z_minus);
-  
-  // E axis movement
-  STATIC_ITEM_F(F("--- Extruder ---"));
-  ACTION_ITEM_F(F("E +"), action_move_e_plus);
-  ACTION_ITEM_F(F("E -"), action_move_e_minus);
-  
-  // ADC position control
-  STATIC_ITEM_F(F("=== ADC Control ==="));
-  if (get_adc_control_active()) {
-    ACTION_ITEM_F(F("Disable ADC"), action_toggle_adc_control);
-  } else {
-    ACTION_ITEM_F(F("Enable ADC"), action_toggle_adc_control);
-  }
-  ACTION_ITEM_F(F("Reset Position"), action_reset_adc_position);
-  
-  END_MENU();
-}
-
-#endif // HAS_MARLINUI_MENU
 
 #endif // MANUAL_CONTROL_MODE
