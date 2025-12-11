@@ -257,7 +257,7 @@ void menu_syringe_pull() {
       // Calculate steps based on volume (approximate conversion)
       uint16_t steps = syringe_volume_ml * 100; // Adjust multiplier as needed
       ui.set_status(F("Pulling syringe..."));
-      manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, true, steps);
+      manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, true, steps);
       ui.set_status(F("Pull complete!"));
     #else
       ui.set_status(F("Manual control disabled"));
@@ -269,7 +269,7 @@ void menu_syringe_pull() {
       // Calculate steps based on volume (approximate conversion)
       uint16_t steps = syringe_volume_ml * 100; // Adjust multiplier as needed
       ui.set_status(F("Pushing syringe..."));
-      manual_move_axis(E0_STEP_PIN, E0_DIR_PIN, false, steps);
+      manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, steps);
       ui.set_status(F("Push complete!"));
     #else
       ui.set_status(F("Manual control disabled"));

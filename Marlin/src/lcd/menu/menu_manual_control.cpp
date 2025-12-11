@@ -20,6 +20,7 @@
 static uint16_t manual_move_steps = 500;
 static uint16_t manual_z_steps = 500;
 static uint16_t manual_e_steps = 500;
+static uint16_t manual_goto_mm = 0; // 0-100 mm target for Y goto
 
 // Manual Control Menu
 void menu_manual_control() {
@@ -33,19 +34,6 @@ void menu_manual_control() {
     ui.completion_feedback();
   });
   
-  // Thermistor readings
-  STATIC_ITEM_F(F("=== Thermistors ==="));
-  ACTION_ITEM_F(F("Read Hotend"), []() {
-    ui.set_status(F("Reading hotend..."));
-    process_manual_command("h");
-    ui.set_status(F("Check serial"));
-  });
-  ACTION_ITEM_F(F("Read Bed"), []() {
-    ui.set_status(F("Reading bed..."));
-    process_manual_command("b");
-    ui.set_status(F("Check serial"));
-  });
-  
   // Stepper control
   STATIC_ITEM_F(F("=== Steppers ==="));
   ACTION_ITEM_F(F("Enable Steppers"), []() {
@@ -55,80 +43,6 @@ void menu_manual_control() {
   ACTION_ITEM_F(F("Disable Steppers"), []() {
     ui.set_status(F("Steppers OFF"));
     process_manual_command("off");
-  });
-  
-  // Movement settings
-  STATIC_ITEM_F(F("=== Movement ==="));
-  EDIT_ITEM_F(uint16_3, F("XY Steps"), &manual_move_steps, 1, 1000);
-  EDIT_ITEM_F(uint16_3, F("Z Steps"), &manual_z_steps, 1, 100);
-  EDIT_ITEM_F(uint16_3, F("E Steps"), &manual_e_steps, 1, 500);
-  
-  // X axis movement
-  STATIC_ITEM_F(F("--- X Axis ---"));
-  ACTION_ITEM_F(F("X +"), []() {
-    ui.set_status(F("Moving X+..."));
-    ui.return_to_status();  // Exit menu before blocking operation
-    char cmd[16];
-    sprintf(cmd, "x+%d", manual_move_steps);
-    process_manual_command(cmd);
-  });
-  ACTION_ITEM_F(F("X -"), []() {
-    ui.set_status(F("Moving X-..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "x-%d", manual_move_steps);
-    process_manual_command(cmd);
-  });
-  
-  // Y axis movement  
-  STATIC_ITEM_F(F("--- Y Axis ---"));
-  ACTION_ITEM_F(F("Y +"), []() {
-    ui.set_status(F("Moving Y+..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "y+%d", manual_move_steps);
-    process_manual_command(cmd);
-  });
-  ACTION_ITEM_F(F("Y -"), []() {
-    ui.set_status(F("Moving Y-..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "y-%d", manual_move_steps);
-    process_manual_command(cmd);
-  });
-  
-  // Z axis movement
-  STATIC_ITEM_F(F("--- Z Axis ---"));
-  ACTION_ITEM_F(F("Z +"), []() {
-    ui.set_status(F("Moving Z+..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "z+%d", manual_z_steps);
-    process_manual_command(cmd);
-  });
-  ACTION_ITEM_F(F("Z -"), []() {
-    ui.set_status(F("Moving Z-..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "z-%d", manual_z_steps);
-    process_manual_command(cmd);
-  });
-  
-  // E axis movement
-  STATIC_ITEM_F(F("--- Extruder ---"));
-  ACTION_ITEM_F(F("E +"), []() {
-    ui.set_status(F("Moving E+..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "e+%d", manual_e_steps);
-    process_manual_command(cmd);
-  });
-  ACTION_ITEM_F(F("E -"), []() {
-    ui.set_status(F("Moving E-..."));
-    ui.return_to_status();
-    char cmd[16];
-    sprintf(cmd, "e-%d", manual_e_steps);
-    process_manual_command(cmd);
   });
   
   // ADC position control
@@ -153,8 +67,78 @@ void menu_manual_control() {
   STATIC_ITEM_F(F("=== Tests ==="));
   ACTION_ITEM_F(F("Test Z Limit"), []() {
     ui.set_status(F("Testing Z limit..."));
-    ui.return_to_status();  // Exit menu before blocking operation
     process_manual_command("tz");
+  });
+  
+  // Movement settings
+  STATIC_ITEM_F(F("=== Movement ==="));
+  EDIT_ITEM_F(uint16_3, F("Z Steps"), &manual_z_steps, 1, 100);
+  EDIT_ITEM_F(uint16_3, F("Goto Y (mm)"), &manual_goto_mm, 0, 100);
+  ACTION_ITEM_F(F("Run Goto"), []() {
+    ui.set_status(F("Goto Y..."));
+    char cmd[16];
+    sprintf(cmd, "goto%u", (unsigned)manual_goto_mm);
+    process_manual_command(cmd);
+  });
+  
+  // X axis movement
+  STATIC_ITEM_F(F("--- X Axis ---"));
+  ACTION_ITEM_F(F("X +"), []() {
+    ui.set_status(F("Moving X+..."));
+    char cmd[16];
+    sprintf(cmd, "x+%d", manual_move_steps);
+    process_manual_command(cmd);
+  });
+  ACTION_ITEM_F(F("X -"), []() {
+    ui.set_status(F("Moving X-..."));
+    char cmd[16];
+    sprintf(cmd, "x-%d", manual_move_steps);
+    process_manual_command(cmd);
+  });
+  
+  // Y axis movement  
+  STATIC_ITEM_F(F("--- Y Axis ---"));
+  ACTION_ITEM_F(F("Y +"), []() {
+    ui.set_status(F("Moving Y+..."));
+    char cmd[16];
+    sprintf(cmd, "y+%d", manual_move_steps);
+    process_manual_command(cmd);
+  });
+  ACTION_ITEM_F(F("Y -"), []() {
+    ui.set_status(F("Moving Y-..."));
+    char cmd[16];
+    sprintf(cmd, "y-%d", manual_move_steps);
+    process_manual_command(cmd);
+  });
+  
+  // Z axis movement
+  STATIC_ITEM_F(F("--- Z Axis ---"));
+  ACTION_ITEM_F(F("Z +"), []() {
+    ui.set_status(F("Moving Z+..."));
+    char cmd[16];
+    sprintf(cmd, "z+%d", manual_z_steps);
+    process_manual_command(cmd);
+  });
+  ACTION_ITEM_F(F("Z -"), []() {
+    ui.set_status(F("Moving Z-..."));
+    char cmd[16];
+    sprintf(cmd, "z-%d", manual_z_steps);
+    process_manual_command(cmd);
+  });
+  
+  // E axis movement
+  STATIC_ITEM_F(F("--- Extruder ---"));
+  ACTION_ITEM_F(F("E +"), []() {
+    ui.set_status(F("Moving E+..."));
+    char cmd[16];
+    sprintf(cmd, "e+%d", manual_e_steps);
+    process_manual_command(cmd);
+  });
+  ACTION_ITEM_F(F("E -"), []() {
+    ui.set_status(F("Moving E-..."));
+    char cmd[16];
+    sprintf(cmd, "e-%d", manual_e_steps);
+    process_manual_command(cmd);
   });
   
   END_MENU();

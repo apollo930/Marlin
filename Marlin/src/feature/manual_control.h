@@ -34,6 +34,8 @@ void reset_adc_position();
 
 // Utility functions
 float calculate_resistance(float voltage, float pullup_resistance = 4700.0f);
+float resistance_to_distance(float resistance_ohms);
+float distance_to_resistance(float distance_mm);
 uint16_t parse_steps(const char* command, uint16_t defaultSteps);
 
 #endif // MANUAL_CONTROL_MODE

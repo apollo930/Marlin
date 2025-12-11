@@ -39,8 +39,12 @@ static uint16_t adc_range = 4095;         // Full ADC range (0-4095)
 static int32_t position_range = 66000;     // ±33000 default range
 static uint32_t last_adc_move = 0;        // Timing control
 
+// Live monitoring variables
+static bool live_monitor_active = false;  // Live ADC monitoring enabled
+static uint8_t monitor_pin = 0;           // 0=hotend, 1=bed
+
 // ADC averaging variables
-#define ADC_SAMPLES 8                     // Number of samples to average
+#define ADC_SAMPLES 10                     // Number of samples to average
 static uint16_t adc_buffer[ADC_SAMPLES];  // Circular buffer for ADC readings
 static uint8_t adc_buffer_index = 0;     // Current buffer position
 static bool adc_buffer_filled = false;   // Whether buffer is fully populated
@@ -53,6 +57,83 @@ float calculate_resistance(float voltage, float pullup_resistance) {
   // Voltage divider: V_thermistor = V_supply * R_thermistor / (R_pullup + R_thermistor)
   // Solving for R_thermistor: R_thermistor = (V_thermistor * R_pullup) / (V_supply - V_thermistor)
   return (voltage * pullup_resistance) / (3.3f - voltage);
+}
+
+// Lookup table for non-linear potentiometer: resistance (kΩ) -> distance (mm)
+const struct {
+  float resistance;  // in kΩ
+  float distance;    // in mm
+} pot_lookup_table[] = {
+  {0.04519, 0},
+  {0.81792, 10},
+  {1.98, 20},
+  {3.17, 30},
+  {4.38, 40},
+  {5.56, 50},
+  {6.79, 60},
+  {8.0, 70},
+  {9.15, 80},
+  {10.37, 90},
+  {11.35, 100}
+};
+const uint8_t pot_lookup_size = sizeof(pot_lookup_table) / sizeof(pot_lookup_table[0]);
+
+// Convert resistance to distance using lookup table with linear interpolation
+float resistance_to_distance(float resistance_ohms) {
+  float resistance_kohms = resistance_ohms / 1000.0f;
+
+  // Clamp to lookup table range
+  if (resistance_kohms <= pot_lookup_table[0].resistance) {
+    return pot_lookup_table[0].distance;
+  }
+  if (resistance_kohms >= pot_lookup_table[pot_lookup_size - 1].resistance) {
+    return pot_lookup_table[pot_lookup_size - 1].distance;
+  }
+  
+  // Find surrounding points for interpolation
+  for (uint8_t i = 0; i < pot_lookup_size - 1; i++) {
+    if (resistance_kohms >= pot_lookup_table[i].resistance && 
+        resistance_kohms <= pot_lookup_table[i + 1].resistance) {
+      // Linear interpolation
+      float r1 = pot_lookup_table[i].resistance;
+      float r2 = pot_lookup_table[i + 1].resistance;
+      float d1 = pot_lookup_table[i].distance;
+      float d2 = pot_lookup_table[i + 1].distance;
+      
+      float t = (resistance_kohms - r1) / (r2 - r1);  // 0 to 1
+      return d1 + t * (d2 - d1);
+    }
+  }
+  
+  return 0.0f;  // Should not reach here
+}
+
+// Convert distance to resistance using lookup table with linear interpolation (reverse lookup)
+float distance_to_resistance(float distance_mm) {
+  // Clamp to lookup table range
+  if (distance_mm <= pot_lookup_table[0].distance) {
+    return pot_lookup_table[0].resistance * 1000.0f;
+  }
+  if (distance_mm >= pot_lookup_table[pot_lookup_size - 1].distance) {
+    return pot_lookup_table[pot_lookup_size - 1].resistance * 1000.0f;
+  }
+  
+  // Find surrounding points for interpolation
+  for (uint8_t i = 0; i < pot_lookup_size - 1; i++) {
+    if (distance_mm >= pot_lookup_table[i].distance && 
+        distance_mm <= pot_lookup_table[i + 1].distance) {
+      // Linear interpolation
+      float d1 = pot_lookup_table[i].distance;
+      float d2 = pot_lookup_table[i + 1].distance;
+      float r1 = pot_lookup_table[i].resistance;
+      float r2 = pot_lookup_table[i + 1].resistance;
+      
+      float t = (distance_mm - d1) / (d2 - d1);  // 0 to 1
+      return (r1 + t * (r2 - r1)) * 1000.0f;  // Convert back to ohms
+    }
+  }
+  
+  return 0.0f;  // Should not reach here
 }
 
 void manual_read_hotend_thermistor() {
@@ -76,6 +157,11 @@ void manual_read_hotend_thermistor() {
     SERIAL_ECHO(resistance);
     SERIAL_ECHOLNPGM("Ω");
   }
+  #if HAS_MARLINUI_MENU
+    char status[20];
+    snprintf(status, 20, "HOT:%u", adcValue);
+    ui.set_status(status);
+  #endif
 }
 
 void manual_read_bed_thermistor() {
@@ -99,6 +185,11 @@ void manual_read_bed_thermistor() {
     SERIAL_ECHO(resistance);
     SERIAL_ECHOLNPGM("Ω");
   }
+  #if HAS_MARLINUI_MENU
+    char status[20];
+    snprintf(status, 20, "BED:%u", adcValue);
+    ui.set_status(status);
+  #endif
 }
 
 void manual_move_axis(pin_t step_pin, pin_t dir_pin, bool direction, uint16_t steps) {
@@ -289,22 +380,32 @@ void manual_adc_control_y() {
   
   uint16_t adcValue = sorted_buffer[samples_to_use / 2];  // Median ADC value
   
-  // Map averaged ADC value to target position (-3200 to +3200 steps)
-  adc_target_position = map(adcValue, 0, adc_range, -position_range/2, position_range/2);
+  // Clamp ADC to physical range (0..2690)
+  adcValue = constrain(adcValue, 0, 2690);
+  
+  // Convert ADC to voltage
+  float voltage = (adcValue * 3.3f) / 4095.0f;
+  
+  // Convert voltage to resistance using voltage divider with 4.7k pullup
+  float resistance = calculate_resistance(voltage, 4700.0f);
+  
+  // Convert resistance to distance using lookup table
+  float target_mm_f = resistance_to_distance(resistance);
+  int32_t target_steps = (int32_t)(target_mm_f * 400.0f);    // steps
   
   // Calculate position error
-  int32_t position_error = adc_target_position - adc_current_position;
+  int32_t position_error = target_steps - adc_current_position;
   
-  // Only move if there's a significant error (deadzone of 5 steps)
-  if (abs(position_error) > 5) {
+  // Deadzone to prevent jitter (20 steps = 0.05mm)
+  if (abs(position_error) > 20) {
     // Enable steppers
     WRITE(X_ENABLE_PIN, LOW);
     
     // Determine direction
     bool direction = position_error > 0;
     
-    // Calculate steps to move this update (proportional control)
-    uint16_t steps_to_move = min((uint16_t)abs(position_error), (uint16_t)10);  // Max 10 steps per update
+    // Proportional control: larger error = more steps (max 50 steps per update)
+    uint16_t steps_to_move = min((uint16_t)abs(position_error), (uint16_t)50);
     
     // Set direction
     WRITE(Y_DIR_PIN, direction ? HIGH : LOW);
@@ -330,16 +431,17 @@ void manual_adc_control_y() {
     static uint8_t update_counter = 0;
     if (++update_counter >= 25) {
       update_counter = 0;
-      SERIAL_ECHO("ADC Position Control - Raw: ");
-      SERIAL_ECHO(raw_adc);
-      SERIAL_ECHO(", Median: ");
+      float current_mm = adc_current_position / 400.0f;
+      float target_mm = target_steps / 400.0f;
+      SERIAL_ECHO("ADC: ");
       SERIAL_ECHO(adcValue);
-      SERIAL_ECHO(", Target: ");
-      SERIAL_ECHO(adc_target_position);
-      SERIAL_ECHO(", Current: ");
-      SERIAL_ECHO(adc_current_position);
-      SERIAL_ECHO(", Error: ");
-      SERIAL_ECHOLN(position_error);
+      SERIAL_ECHO(" | Target: ");
+      SERIAL_ECHO(target_mm);
+      SERIAL_ECHO("mm | Current: ");
+      SERIAL_ECHO(current_mm);
+      SERIAL_ECHO("mm | Error: ");
+      SERIAL_ECHO(position_error);
+      SERIAL_ECHOLNPGM(" steps");
     }
   }
 }
@@ -357,6 +459,39 @@ uint16_t parse_steps(const char* command, uint16_t defaultSteps) {
   }
   
   return (steps > 0 && steps <= 10000) ? steps : defaultSteps; // Limit to 10000 steps max
+}
+
+// Parse millimeters and convert to steps (400 steps/mm)
+uint16_t parse_mm_to_steps(const char* command) {
+  // Find the number after the command (e.g., "xm+1.5")
+  const char* numStart = command + 3; // Skip "xm+"
+  if (*numStart == '\0') return 0;
+  
+  // Parse integer and decimal parts
+  float mm = 0.0f;
+  float decimal = 0.0f;
+  float decimal_place = 0.1f;
+  bool in_decimal = false;
+  
+  while ((*numStart >= '0' && *numStart <= '9') || *numStart == '.') {
+    if (*numStart == '.') {
+      in_decimal = true;
+    } else if (in_decimal) {
+      decimal += (*numStart - '0') * decimal_place;
+      decimal_place *= 0.1f;
+    } else {
+      mm = mm * 10.0f + (*numStart - '0');
+    }
+    numStart++;
+  }
+  
+  mm += decimal;
+  
+  // Convert mm to steps (400 steps/mm)
+  uint16_t steps = (uint16_t)(mm * 400.0f);
+  
+  // Limit to reasonable range
+  return (steps > 0 && steps <= 10000) ? steps : 0;
 }
 
 // Command processor
@@ -382,6 +517,24 @@ void process_manual_command(const char* command) {
   else if (strncmp(command, "y-", 2) == 0) {
     uint16_t steps = parse_steps(command, 500);
     manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, steps);
+  }
+  else if (strncmp(command, "ym+", 3) == 0) {
+    uint16_t steps = parse_mm_to_steps(command);
+    if (steps > 0) {
+      manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, true, steps);
+      SERIAL_ECHO("Y+ ");
+      SERIAL_ECHO(steps);
+      SERIAL_ECHOLNPGM(" steps");
+    }
+  }
+  else if (strncmp(command, "ym-", 3) == 0) {
+    uint16_t steps = parse_mm_to_steps(command);
+    if (steps > 0) {
+      manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, steps);
+      SERIAL_ECHO("Y- ");
+      SERIAL_ECHO(steps);
+      SERIAL_ECHOLNPGM(" steps");
+    }
   }
   else if (strncmp(command, "z+", 2) == 0) {
     uint16_t steps = parse_steps(command, 500);
@@ -423,11 +576,167 @@ void process_manual_command(const char* command) {
     adc_current_position = 0;
     SERIAL_ECHOLNPGM("Current position reset to zero");
   }
+  else if (strcmp(command, "monitor_on") == 0) {
+    live_monitor_active = true;
+    SERIAL_ECHOLNPGM("Live ADC monitoring ENABLED");
+  }
+  else if (strcmp(command, "monitor_off") == 0) {
+    live_monitor_active = false;
+    SERIAL_ECHOLNPGM("Live ADC monitoring DISABLED");
+  }
+  else if (strcmp(command, "monitor_hotend") == 0) {
+    live_monitor_active = true;
+    monitor_pin = 0;
+    SERIAL_ECHOLNPGM("Live monitoring HOTEND (PC5)");
+  }
+  else if (strcmp(command, "monitor_bed") == 0) {
+    live_monitor_active = true;
+    monitor_pin = 1;
+    SERIAL_ECHOLNPGM("Live monitoring BED (PC4)");
+  }
   else if (strcmp(command, "tz") == 0) {
     test_z_limit_switch();
   }
   else if (strcmp(command, "ts") == 0) {
     test_limit_switch_only();
+  }
+  else if (strncmp(command, "goto", 4) == 0) {
+    // Parse mm value from command (e.g., "goto50" or "goto12.5")
+    const char* numStart = command + 4;
+    if (*numStart != '\0') {
+      float target_mm = 0.0f;
+      float decimal = 0.0f;
+      float decimal_place = 0.1f;
+      bool in_decimal = false;
+      
+      while ((*numStart >= '0' && *numStart <= '9') || *numStart == '.') {
+        if (*numStart == '.') {
+          in_decimal = true;
+        } else if (in_decimal) {
+          decimal += (*numStart - '0') * decimal_place;
+          decimal_place *= 0.1f;
+        } else {
+          target_mm = target_mm * 10.0f + (*numStart - '0');
+        }
+        numStart++;
+      }
+      
+      target_mm += decimal;
+      
+      // Validate range (0 to 100mm)
+      if (target_mm >= 0.0f && target_mm <= 100.0f) {
+        // Convert target mm to target resistance using lookup table
+        float target_resistance = distance_to_resistance(target_mm);
+        
+        SERIAL_ECHO("Moving to ");
+        SERIAL_ECHO(target_mm);
+        SERIAL_ECHO("mm (Target R: ");
+        SERIAL_ECHO(target_resistance);
+        SERIAL_ECHOLNPGM("Ω)");
+        
+        // Enable steppers
+        WRITE(X_ENABLE_PIN, LOW);
+        
+        // Closed-loop control with resistance feedback
+        const uint16_t max_iterations = 5000; // Timeout after 5000 iterations
+        uint16_t iteration = 0;
+        const float resistance_tolerance = 56.5f; // Ohms tolerance (~0.5mm with 113 ohms/mm)
+        
+        while (iteration < max_iterations) {
+          // Read current ADC position with median filter
+          uint16_t adc_readings[8];
+          for (uint8_t i = 0; i < 8; i++) {
+            adc_readings[i] = analogRead(TEMP_BED_PIN);
+            DELAY_US(1000);
+          }
+          
+          // Sort for median
+          for (uint8_t i = 0; i < 7; i++) {
+            for (uint8_t j = 0; j < 7 - i; j++) {
+              if (adc_readings[j] > adc_readings[j + 1]) {
+                uint16_t temp = adc_readings[j];
+                adc_readings[j] = adc_readings[j + 1];
+                adc_readings[j + 1] = temp;
+              }
+            }
+          }
+          uint16_t current_adc = adc_readings[4]; // Median
+          
+          // Clamp to valid range
+          current_adc = constrain(current_adc, 0, 2690);
+          
+          // Convert ADC to voltage, then to resistance with 4.7k pullup
+          float voltage = (current_adc * 3.3f) / 4095.0f;
+          float current_resistance = calculate_resistance(voltage, 4700.0f);
+          
+          // Calculate error in resistance
+          float resistance_error = target_resistance - current_resistance;
+          
+          // Check if we've reached target
+          if (abs(resistance_error) <= resistance_tolerance) {
+            float final_mm = resistance_to_distance(current_resistance);
+            SERIAL_ECHO("Target reached! R: ");
+            SERIAL_ECHO(current_resistance);
+            SERIAL_ECHO("Ω Position: ");
+            SERIAL_ECHO(final_mm);
+            SERIAL_ECHOLNPGM("mm");
+            
+            // Update position tracking
+            adc_current_position = (int32_t)(final_mm * 400.0f);
+            break;
+          }
+          
+          // Proportional control: move based on error magnitude
+          bool direction = resistance_error < 0; // Negative error means move forward
+          uint16_t steps_to_move = min((uint16_t)abs((int32_t)resistance_error / 6), (uint16_t)20); // Scale error, max 20 steps
+          steps_to_move = max(steps_to_move, (uint16_t)1); // Minimum 1 step
+          
+          // Set direction
+          WRITE(Y_DIR_PIN, direction ? HIGH : LOW);
+          DELAY_US(10);
+          
+          // Move steps
+          for (uint16_t i = 0; i < steps_to_move; i++) {
+            WRITE(Y_STEP_PIN, HIGH);
+            DELAY_US(500);
+            WRITE(Y_STEP_PIN, LOW);
+            DELAY_US(500);
+          }
+          
+          // Progress feedback every 100 iterations
+          if (iteration % 100 == 0) {
+            float current_mm = constrain(current_resistance / 113.0f, 0.0f, 100.0f);
+            SERIAL_ECHO("R: ");
+            SERIAL_ECHO(current_resistance);
+            SERIAL_ECHO("Ω Pos: ");
+            SERIAL_ECHO(current_mm);
+            SERIAL_ECHO("mm Error: ");
+            SERIAL_ECHOLN(resistance_error);
+          }
+          
+          iteration++;
+          hal.watchdog_refresh();
+        }
+        
+        if (iteration >= max_iterations) {
+          SERIAL_ECHOLNPGM("Warning: Max iterations reached");
+        }
+      } else {
+        SERIAL_ECHOLNPGM("Error: Position must be 0-100mm");
+      }
+    } else {
+      // Read current resistance position
+      uint16_t current_adc = analogRead(TEMP_BED_PIN);
+      current_adc = constrain(current_adc, 0, 2690);
+      float voltage = (current_adc * 3.3f) / 4095.0f;
+      float current_resistance = calculate_resistance(voltage, 4700.0f);
+      float current_mm = constrain(current_resistance / 113.0f, 0.0f, 100.0f);
+      SERIAL_ECHO("Current R: ");
+      SERIAL_ECHO(current_resistance);
+      SERIAL_ECHO("Ω Position: ");
+      SERIAL_ECHO(current_mm);
+      SERIAL_ECHOLNPGM("mm");
+    }
   }
   else if (strncmp(command, "adc_range", 9) == 0) {
     const char* numStart = command + 9;
@@ -455,6 +764,8 @@ void process_manual_command(const char* command) {
     SERIAL_ECHOLNPGM("x-[steps] - Move X negative");
     SERIAL_ECHOLNPGM("y+[steps] - Move Y positive");
     SERIAL_ECHOLNPGM("y-[steps] - Move Y negative");
+    SERIAL_ECHOLNPGM("ym+[mm] - Move Y positive in mm (e.g., ym+1.5)");
+    SERIAL_ECHOLNPGM("ym-[mm] - Move Y negative in mm (400 steps/mm)");
     SERIAL_ECHOLNPGM("z+[steps] - Move Z up (default 10)");
     SERIAL_ECHOLNPGM("z-[steps] - Move Z down");
     SERIAL_ECHOLNPGM("e+[steps] - Extrude (default 50)");
@@ -463,10 +774,16 @@ void process_manual_command(const char* command) {
     SERIAL_ECHOLNPGM("off - Disable steppers");
     SERIAL_ECHOLNPGM("ts - Test limit switch only");
     SERIAL_ECHOLNPGM("tz - Test Z limit switch");
+    SERIAL_ECHOLNPGM("goto[mm] - Move to absolute position (e.g., goto50 or goto12.5)");
+    SERIAL_ECHOLNPGM("           Range: 0-100mm, 400 steps/mm");
     SERIAL_ECHOLNPGM("adc_on - Enable ADC position control");
     SERIAL_ECHOLNPGM("adc_off - Disable ADC position control");
     SERIAL_ECHOLNPGM("adc_zero - Reset current position to zero");
     SERIAL_ECHOLNPGM("adc_range[value] - Set position range (default 66000 => ±33000)");
+    SERIAL_ECHOLNPGM("monitor_on - Start live ADC monitoring");
+    SERIAL_ECHOLNPGM("monitor_off - Stop live ADC monitoring");
+    SERIAL_ECHOLNPGM("monitor_hotend - Monitor hotend sensor (PC5)");
+    SERIAL_ECHOLNPGM("monitor_bed - Monitor bed sensor (PC4)");
   }
   else if (strlen(command) > 0) {
     SERIAL_ECHO("Unknown command: ");
