@@ -28,7 +28,7 @@
 /**
  * Marlin release version identifier
  */
-//#define SHORT_BUILD_VERSION "Cool Project"
+//#define SHORT_BUILD_VERSION "bugfix-2.1.x"
 
 /**
  * Verbose version identifier which should contain a reference to the location
