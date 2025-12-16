@@ -60,21 +60,82 @@ float calculate_resistance(float voltage, float pullup_resistance) {
 }
 
 // Lookup table for non-linear potentiometer: resistance (kΩ) -> distance (mm)
+// Calibrated data: 10mm to 80mm range
 const struct {
   float resistance;  // in kΩ
   float distance;    // in mm
 } pot_lookup_table[] = {
-  {0.04519, 0},
-  {0.81792, 10},
-  {1.98, 20},
-  {3.17, 30},
-  {4.38, 40},
-  {5.56, 50},
-  {6.79, 60},
-  {8.0, 70},
-  {9.15, 80},
-  {10.37, 90},
-  {11.35, 100}
+  {0.79, 10},
+  {0.86, 11},
+  {0.98, 12},
+  {1.09, 13},
+  {1.21, 14},
+  {1.32, 15},
+  {1.45, 16},
+  {1.56, 17},
+  {1.68, 18},
+  {1.79, 19},
+  {1.91, 20},
+  {2.03, 21},
+  {2.15, 22},
+  {2.27, 23},
+  {2.39, 24},
+  {2.51, 25},
+  {2.63, 26},
+  {2.75, 27},
+  {2.87, 28},
+  {2.99, 29},
+  {3.11, 30},
+  {3.22, 31},
+  {3.35, 32},
+  {3.47, 33},
+  {3.59, 34},
+  {3.71, 35},
+  {3.82, 36},
+  {3.94, 37},
+  {4.05, 38},
+  {4.18, 39},
+  {4.30, 40},
+  {4.41, 41},
+  {4.53, 42},
+  {4.64, 43},
+  {4.77, 44},
+  {4.88, 45},
+  {5.01, 46},
+  {5.13, 47},
+  {5.25, 48},
+  {5.37, 49},
+  {5.49, 50},
+  {5.61, 51},
+  {5.73, 52},
+  {5.85, 53},
+  {5.96, 54},
+  {6.08, 55},
+  {6.19, 56},
+  {6.32, 57},
+  {6.44, 58},
+  {6.56, 59},
+  {6.68, 60},
+  {6.80, 61},
+  {6.93, 62},
+  {7.04, 63},
+  {7.15, 64},
+  {7.28, 65},
+  {7.40, 66},
+  {7.51, 67},
+  {7.64, 68},
+  {7.76, 69},
+  {7.88, 70},
+  {8.00, 71},
+  {8.12, 72},
+  {8.24, 73},
+  {8.36, 74},
+  {8.47, 75},
+  {8.60, 76},
+  {8.72, 77},
+  {8.83, 78},
+  {8.95, 79},
+  {9.00, 80}
 };
 const uint8_t pot_lookup_size = sizeof(pot_lookup_table) / sizeof(pot_lookup_table[0]);
 
@@ -342,6 +403,144 @@ void test_z_limit_switch() {
   #endif
 }
 
+void calibrate_potentiometer() {
+  SERIAL_ECHOLNPGM("=== Potentiometer Calibration ===");
+  SERIAL_ECHOLNPGM("This will move Y axis and record resistance values");
+  SERIAL_ECHOLNPGM("Make sure Y axis is at 10mm position before starting!");
+  SERIAL_ECHOLNPGM("Press any key to start or 'q' to quit...");
+  
+  // Wait for user confirmation
+  while (!MYSERIAL1.available()) {
+    hal.watchdog_refresh();
+    delay(10);
+  }
+  
+  char confirm = MYSERIAL1.read();
+  if (confirm == 'q' || confirm == 'Q') {
+    SERIAL_ECHOLNPGM("Calibration cancelled");
+    return;
+  }
+  
+  // Clear any remaining serial data
+  while (MYSERIAL1.available()) MYSERIAL1.read();
+  
+  // Enable steppers
+  WRITE(X_ENABLE_PIN, LOW);
+  DELAY_US(100);
+  
+  SERIAL_ECHOLNPGM("\nStarting calibration...");
+  SERIAL_ECHOLNPGM("=== COPY BELOW INTO pot_lookup_table[] ===");
+  SERIAL_ECHOLNPGM("");
+  
+  const uint16_t steps_per_mm = 400;
+  const uint8_t start_distance_mm = 10;
+  const uint8_t end_distance_mm = 80;
+  const uint8_t measurement_interval_mm = 1; // Take measurement every 1mm
+  const uint8_t total_measurements = (end_distance_mm - start_distance_mm) / measurement_interval_mm + 1;
+  
+  // Set direction to positive (reversed)
+  WRITE(Y_DIR_PIN, LOW);
+  DELAY_US(100);
+  
+  uint8_t measurement_count = 0;
+  
+  for (uint8_t distance_mm = start_distance_mm; distance_mm <= end_distance_mm; distance_mm += measurement_interval_mm) {
+    // Take multiple ADC readings and average
+    const uint8_t num_samples = 20;
+    uint32_t adc_sum = 0;
+    
+    delay(100); // Let motor settle
+    
+    for (uint8_t i = 0; i < num_samples; i++) {
+      uint16_t adc_val = analogRead(TEMP_BED_PIN);
+      adc_sum += adc_val;
+      delay(10);
+      hal.watchdog_refresh();
+    }
+    
+    uint16_t adc_avg = adc_sum / num_samples;
+    
+    // Clamp to valid range
+    adc_avg = constrain(adc_avg, 0, 2690);
+    
+    // Convert to voltage and resistance
+    float voltage = (adc_avg * 3.3f) / 4095.0f;
+    float resistance = calculate_resistance(voltage, 4700.0f);
+    float resistance_kohms = resistance / 1000.0f;
+    
+    // Output in format ready for lookup table
+    SERIAL_ECHO("  {");
+    SERIAL_ECHO(resistance_kohms);
+    SERIAL_ECHO(", ");
+    SERIAL_ECHO(distance_mm);
+    SERIAL_ECHO("}");
+    
+    measurement_count++;
+    if (measurement_count < total_measurements) {
+      SERIAL_ECHO(",");
+    }
+    
+    // Also output raw data for reference
+    SERIAL_ECHO("  // ADC: ");
+    SERIAL_ECHO(adc_avg);
+    SERIAL_ECHO(", V: ");
+    SERIAL_ECHO(voltage);
+    SERIAL_ECHOLNPGM("V");
+    
+    // Move to next position (except at last measurement)
+    if (distance_mm < end_distance_mm) {
+      uint16_t steps_to_move = steps_per_mm * measurement_interval_mm;
+      
+      for (uint16_t i = 0; i < steps_to_move; i++) {
+        WRITE(Y_STEP_PIN, HIGH);
+        DELAY_US(500);
+        WRITE(Y_STEP_PIN, LOW);
+        DELAY_US(1500);
+        
+        if (i % 10 == 0) hal.watchdog_refresh();
+      }
+    }
+  }
+  
+  SERIAL_ECHOLNPGM("");
+  SERIAL_ECHOLNPGM("=== END LOOKUP TABLE DATA ===");
+  SERIAL_ECHO("Total measurements: ");
+  SERIAL_ECHOLN(measurement_count);
+  SERIAL_ECHOLNPGM("\nUpdate code:");
+  SERIAL_ECHO("const uint8_t pot_lookup_size = ");
+  SERIAL_ECHO(measurement_count);
+  SERIAL_ECHOLNPGM(";");
+  SERIAL_ECHOLNPGM("\nReturning to 10mm start position...");
+  
+  // Return to start position (10mm) (reversed)
+  WRITE(Y_DIR_PIN, HIGH);
+  DELAY_US(100);
+  
+  uint32_t total_steps = steps_per_mm * (end_distance_mm - start_distance_mm);
+  for (uint32_t i = 0; i < total_steps; i++) {
+    WRITE(Y_STEP_PIN, HIGH);
+    DELAY_US(500);
+    WRITE(Y_STEP_PIN, LOW);
+    DELAY_US(1500);
+    
+    if (i % 100 == 0) {
+      hal.watchdog_refresh();
+      if (i % 2000 == 0) {
+        SERIAL_ECHO("Returning... ");
+        SERIAL_ECHO((total_steps - i) / steps_per_mm);
+        SERIAL_ECHOLNPGM("mm remaining");
+      }
+    }
+  }
+  
+  SERIAL_ECHOLNPGM("Calibration routine complete!");
+  SERIAL_ECHOLNPGM("Back at 10mm position");
+  
+  #if HAS_MARLINUI_MENU
+    ui.set_status(F("Cal complete!"));
+  #endif
+}
+
 void manual_adc_control_y() {
   if (!adc_control_active) return;
   
@@ -600,6 +799,9 @@ void process_manual_command(const char* command) {
   else if (strcmp(command, "ts") == 0) {
     test_limit_switch_only();
   }
+  else if (strcmp(command, "cal") == 0 || strcmp(command, "calibrate") == 0) {
+    calibrate_potentiometer();
+  }
   else if (strncmp(command, "goto", 4) == 0) {
     // Parse mm value from command (e.g., "goto50" or "goto12.5")
     const char* numStart = command + 4;
@@ -774,6 +976,7 @@ void process_manual_command(const char* command) {
     SERIAL_ECHOLNPGM("off - Disable steppers");
     SERIAL_ECHOLNPGM("ts - Test limit switch only");
     SERIAL_ECHOLNPGM("tz - Test Z limit switch");
+    SERIAL_ECHOLNPGM("cal - Calibrate potentiometer (records R values every 1mm)");
     SERIAL_ECHOLNPGM("goto[mm] - Move to absolute position (e.g., goto50 or goto12.5)");
     SERIAL_ECHOLNPGM("           Range: 0-100mm, 400 steps/mm");
     SERIAL_ECHOLNPGM("adc_on - Enable ADC position control");

@@ -23,6 +23,7 @@ void manual_enable_steppers();
 void manual_disable_steppers();
 void test_limit_switch_only();
 void test_z_limit_switch();
+void calibrate_potentiometer();
 void manual_adc_control_y();
 void process_manual_command(const char* command);
 
