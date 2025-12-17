@@ -13,6 +13,15 @@
 
 #include "../inc/MarlinConfig.h"
 
+// Movement status enum for non-blocking operations
+enum MoveStatus : uint8_t {
+  MOVE_IDLE,
+  MOVE_IN_PROGRESS,
+  MOVE_COMPLETE,
+  MOVE_ERROR_BOUNDS,
+  MOVE_ERROR_TIMEOUT
+};
+
 // Function declarations
 void manual_control_init();
 void manual_control_task();
@@ -27,6 +36,11 @@ void calibrate_potentiometer();
 void manual_adc_control_y();
 void process_manual_command(const char* command);
 
+// Non-blocking movement functions
+MoveStatus move_to_absolute_mm(float target_mm);
+MoveStatus move_relative_mm(float delta_mm);
+float get_current_position_mm();
+
 // Menu integration functions
 void menu_manual_control();
 bool get_adc_control_active();
@@ -38,5 +52,8 @@ float calculate_resistance(float voltage, float pullup_resistance = 4700.0f);
 float resistance_to_distance(float resistance_ohms);
 float distance_to_resistance(float distance_mm);
 uint16_t parse_steps(const char* command, uint16_t defaultSteps);
+
+// Expose limit switch state for menu access
+extern volatile bool limit_switch_triggered;
 
 #endif // MANUAL_CONTROL_MODE

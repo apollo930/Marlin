@@ -25,10 +25,13 @@
 //
 
 #include "../../inc/MarlinConfigPre.h"
-int8_t syringe_volume_ml = 5; // default 5 mL
-float mm_per_ml = 5.0f; // Conversion factor (adjust as needed)
 
 #if HAS_MARLINUI_MENU
+
+// Syringe pull workflow variables
+#if ENABLED(MANUAL_CONTROL_MODE)
+  static float syringe_volume_ml = 1.0f; // Default 1.0 mL (0-5 range)
+#endif
 
 #include "menu_item.h"
 #include "../../module/temperature.h"
@@ -39,6 +42,7 @@ float mm_per_ml = 5.0f; // Conversion factor (adjust as needed)
 
 #if ENABLED(MANUAL_CONTROL_MODE)
   #include "../../feature/manual_control.h"
+  #include "../../HAL/shared/Delay.h"
 #endif
 
 #if ENABLED(PSU_CONTROL)
@@ -242,63 +246,210 @@ void menu_configuration();
 
 #endif // CUSTOM_MENU_MAIN
 
-void menu_syringe_pull() {
+#if ENABLED(MANUAL_CONTROL_MODE)
+
+// Forward declarations for syringe pull workflow
+void syringe_volume_input_menu();
+void vial_confirm_screen();
+void syringe_confirm_screen();
+void syringe_execution_screen();
+
+// Simple blocking execution function
+void execute_syringe_sequence() {
+  float dy_mm = syringe_volume_ml * 16.74f;
+  uint32_t dy_steps = (uint32_t)(dy_mm * 400.0f); // 400 steps/mm
+  
+  SERIAL_ECHO("Starting syringe sequence: ");
+  SERIAL_ECHO(syringe_volume_ml);
+  SERIAL_ECHO("mL -> ");
+  SERIAL_ECHO(dy_mm);
+  SERIAL_ECHOLNPGM("mm");
+  
+  // Enable steppers
+  WRITE(X_ENABLE_PIN, LOW);
+  DELAY_US(100);
+  
+  ui.set_status(F("Retracting..."));
+  
+  // Step 1: Retract Y by dy
+  SERIAL_ECHOLNPGM("Step 1: Retracting Y");
+  WRITE(Y_DIR_PIN, HIGH);  // Backward
+  DELAY_US(10);
+  for (uint32_t i = 0; i < dy_steps; i++) {
+    WRITE(Y_STEP_PIN, HIGH);
+    DELAY_US(500);
+    WRITE(Y_STEP_PIN, LOW);
+    DELAY_US(1500);
+    if (i % 100 == 0) hal.watchdog_refresh();
+  }
+  
+  ui.set_status(F("Finding limit..."));
+  
+  // Step 2: Find Z limit switch
+  SERIAL_ECHOLNPGM("Step 2: Finding Z limit");
+  limit_switch_triggered = false;
+  WRITE(Z_DIR_PIN, LOW);  // Anticlockwise
+  DELAY_US(100);
+  
+  uint32_t z_steps = 0;
+  while (!limit_switch_triggered && z_steps < 50000) {
+    WRITE(Z_STEP_PIN, HIGH);
+    DELAY_US(100);
+    WRITE(Z_STEP_PIN, LOW);
+    DELAY_US(400);
+    z_steps++;
+    if (z_steps % 100 == 0) hal.watchdog_refresh();
+  }
+  
+  if (limit_switch_triggered) {
+    SERIAL_ECHO("Limit found at ");
+    SERIAL_ECHO(z_steps);
+    SERIAL_ECHOLNPGM(" steps");
+  } else {
+    SERIAL_ECHOLNPGM("ERROR: Limit not found!");
+    ui.set_status(F("ERROR!"));
+    WRITE(X_ENABLE_PIN, HIGH);
+    delay(3000);
+    return;
+  }
+  
+  ui.set_status(F("Pushing..."));
+  
+  // Step 3: Push Y forward by dy
+  SERIAL_ECHOLNPGM("Step 3: Pushing Y forward");
+  WRITE(Y_DIR_PIN, LOW);  // Forward
+  DELAY_US(10);
+  for (uint32_t i = 0; i < dy_steps; i++) {
+    WRITE(Y_STEP_PIN, HIGH);
+    DELAY_US(500);
+    WRITE(Y_STEP_PIN, LOW);
+    DELAY_US(1500);
+    if (i % 100 == 0) hal.watchdog_refresh();
+  }
+  
+  ui.set_status(F("Extra retract..."));
+  
+  // Step 4: Retract Y by (dy + 5mm)
+  SERIAL_ECHOLNPGM("Step 4: Extra retract");
+  uint32_t extra_steps = (uint32_t)((dy_mm + 5.0f) * 400.0f);
+  WRITE(Y_DIR_PIN, HIGH);  // Backward
+  DELAY_US(10);
+  for (uint32_t i = 0; i < extra_steps; i++) {
+    WRITE(Y_STEP_PIN, HIGH);
+    DELAY_US(500);
+    WRITE(Y_STEP_PIN, LOW);
+    DELAY_US(1500);
+    if (i % 100 == 0) hal.watchdog_refresh();
+  }
+  
+  ui.set_status(F("Final push..."));
+  
+  // Step 5: Push Y forward by 5mm
+  SERIAL_ECHOLNPGM("Step 5: Final push");
+  uint32_t final_steps = 2000; // 5mm * 400 steps/mm
+  WRITE(Y_DIR_PIN, LOW);  // Forward
+  DELAY_US(10);
+  for (uint32_t i = 0; i < final_steps; i++) {
+    WRITE(Y_STEP_PIN, HIGH);
+    DELAY_US(500);
+    WRITE(Y_STEP_PIN, LOW);
+    DELAY_US(1500);
+    if (i % 100 == 0) hal.watchdog_refresh();
+  }
+  
+  ui.set_status(F("Returning Z..."));
+  
+  // Step 6: Return Z to initial position
+  SERIAL_ECHOLNPGM("Step 6: Returning Z");
+  WRITE(Z_DIR_PIN, HIGH);  // Clockwise
+  DELAY_US(100);
+  for (uint32_t i = 0; i < z_steps; i++) {
+    WRITE(Z_STEP_PIN, HIGH);
+    DELAY_US(100);
+    WRITE(Z_STEP_PIN, LOW);
+    DELAY_US(400);
+    if (i % 100 == 0) hal.watchdog_refresh();
+  }
+  
+  // Disable steppers
+  WRITE(X_ENABLE_PIN, HIGH);
+  
+  SERIAL_ECHOLNPGM("Sequence complete!");
+  ui.set_status(F("Complete!"));
+  delay(2000);
+}
+
+// Screen that shows progress (just calls blocking function once)
+void syringe_execution_screen() {
+  static bool executed = false;
+  
+  if (!executed) {
+    executed = true;
+    execute_syringe_sequence();
+    executed = false;
+    ui.return_to_status();
+  }
+}
+
+// Syringe holder confirmation menu
+void syringe_confirm_screen() {
   START_MENU();
-  BACK_ITEM(MSG_MAIN_MENU); // Go back to main menu
+  BACK_ITEM(MSG_MAIN_MENU);
   
-  EDIT_ITEM_F(int8, F("Volume (mL)"), &syringe_volume_ml, 1, 20);
+  STATIC_ITEM_F(F("Step 2/2:"), SS_CENTER|SS_INVERT);
+  STATIC_ITEM_F(F("Place syringe"), SS_CENTER);
+  STATIC_ITEM_F(F("in holder"), SS_CENTER);
   
-  // Display current volume setting
-  STATIC_ITEM_F(F("Pull Volume Set"));
-  
-  // Add action items for syringe operations
-  ACTION_ITEM_F(F("Pull Syringe"), []() {
-    #if ENABLED(MANUAL_CONTROL_MODE)
-      // Calculate steps based on volume (approximate conversion)
-      uint16_t steps = syringe_volume_ml * 100; // Adjust multiplier as needed
-      ui.set_status(F("Pulling syringe..."));
-      manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, true, steps);
-      ui.set_status(F("Pull complete!"));
-    #else
-      ui.set_status(F("Manual control disabled"));
-    #endif
-  });
-  
-  ACTION_ITEM_F(F("Push Syringe"), []() {
-    #if ENABLED(MANUAL_CONTROL_MODE)
-      // Calculate steps based on volume (approximate conversion)
-      uint16_t steps = syringe_volume_ml * 100; // Adjust multiplier as needed
-      ui.set_status(F("Pushing syringe..."));
-      manual_move_axis(Y_STEP_PIN, Y_DIR_PIN, false, steps);
-      ui.set_status(F("Push complete!"));
-    #else
-      ui.set_status(F("Manual control disabled"));
-    #endif
-  });
-  
-  // Add a test action to verify the menu is working
-  ACTION_ITEM_F(F("Test Action"), []() {
-    ui.set_status(F("Menu action works!"));
-  });
-  
-  // Toggle steppers on/off
-  ACTION_ITEM_F(F("Toggle Steppers"), []() {
-    #if ENABLED(MANUAL_CONTROL_MODE)
-      static bool steppers_enabled = false;
-      steppers_enabled = !steppers_enabled;
-      if (steppers_enabled) {
-        manual_enable_steppers();
-        ui.set_status(F("Steppers ON"));
-      } else {
-        manual_disable_steppers();
-        ui.set_status(F("Steppers OFF"));
-      }
-    #else
-      ui.set_status(F("Manual control disabled"));
-    #endif
+  ACTION_ITEM_F(F("Start"), []() {
+    ui.goto_screen(syringe_execution_screen);
   });
   
   END_MENU();
+}
+
+// Vial confirmation menu
+void vial_confirm_screen() {
+  START_MENU();
+  BACK_ITEM(MSG_MAIN_MENU);
+  
+  STATIC_ITEM_F(F("Step 1/2:"), SS_CENTER|SS_INVERT);
+  STATIC_ITEM_F(F("Place vial"), SS_CENTER);
+  STATIC_ITEM_F(F("in holder"), SS_CENTER);
+  
+  ACTION_ITEM_F(F("Continue"), []() {
+    ui.goto_screen(syringe_confirm_screen);
+  });
+  
+  END_MENU();
+}
+
+// Volume input menu
+void syringe_volume_input_menu() {
+  START_MENU();
+  BACK_ITEM(MSG_MAIN_MENU);
+  
+  EDIT_ITEM_F(float52, F("Volume (mL)"), &syringe_volume_ml, 0.0f, 5.0f);
+  
+  ACTION_ITEM_F(F("Continue"), []() {
+    ui.goto_screen(vial_confirm_screen);
+  });
+  
+  END_MENU();
+}
+
+#endif // MANUAL_CONTROL_MODE
+
+// Entry point for syringe pull menu
+void menu_syringe_pull() {
+  #if ENABLED(MANUAL_CONTROL_MODE)
+    ui.goto_screen(syringe_volume_input_menu);
+  #else
+    START_MENU();
+    BACK_ITEM(MSG_MAIN_MENU);
+    STATIC_ITEM_F(F("Manual control"), SS_CENTER);
+    STATIC_ITEM_F(F("not enabled"), SS_CENTER);
+    END_MENU();
+  #endif
 }
 
 #if ENABLED(MANUAL_CONTROL_MODE)

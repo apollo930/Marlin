@@ -20,7 +20,7 @@
 #endif
 
 // Limit switch interrupt variables
-static volatile bool limit_switch_triggered = false;
+volatile bool limit_switch_triggered = false;
 static volatile uint32_t limit_switch_timestamp = 0;
 
 // Interrupt handler for limit switch
@@ -1020,6 +1020,149 @@ void manual_control_task() {
   if (!MYSERIAL1.available()) {
     manual_adc_control_y();
   }
+}
+
+// Get current Y position from potentiometer (non-blocking)
+float get_current_position_mm() {
+  // Read ADC with median filter
+  uint16_t adc_readings[8];
+  for (uint8_t i = 0; i < 8; i++) {
+    adc_readings[i] = analogRead(TEMP_BED_PIN);
+    DELAY_US(1000);
+  }
+  
+  // Sort for median
+  for (uint8_t i = 0; i < 7; i++) {
+    for (uint8_t j = 0; j < 7 - i; j++) {
+      if (adc_readings[j] > adc_readings[j + 1]) {
+        uint16_t temp = adc_readings[j];
+        adc_readings[j] = adc_readings[j + 1];
+        adc_readings[j + 1] = temp;
+      }
+    }
+  }
+  uint16_t current_adc = adc_readings[4]; // Median
+  
+  // Clamp to valid range
+  current_adc = constrain(current_adc, 0, 2690);
+  
+  // Convert ADC to voltage, then to resistance with 4.7k pullup
+  float voltage = (current_adc * 3.3f) / 4095.0f;
+  float current_resistance = calculate_resistance(voltage, 4700.0f);
+  
+  // Convert resistance to distance
+  return resistance_to_distance(current_resistance);
+}
+
+// Non-blocking absolute position movement
+MoveStatus move_to_absolute_mm(float target_mm) {
+  // State variables for non-blocking operation
+  static bool move_active = false;
+  static float target_resistance = 0.0f;
+  static uint16_t iteration = 0;
+  static const uint16_t max_iterations = 5000;
+  static const float resistance_tolerance = 56.5f; // ~0.5mm
+  
+  // Validate target range
+  if (!move_active && (target_mm < 10.0f || target_mm > 80.0f)) {
+    return MOVE_ERROR_BOUNDS;
+  }
+  
+  // Initialize movement
+  if (!move_active) {
+    target_resistance = distance_to_resistance(target_mm);
+    iteration = 0;
+    move_active = true;
+    WRITE(X_ENABLE_PIN, LOW); // Enable steppers
+    return MOVE_IN_PROGRESS;
+  }
+  
+  // Read current position
+  uint16_t adc_readings[8];
+  for (uint8_t i = 0; i < 8; i++) {
+    adc_readings[i] = analogRead(TEMP_BED_PIN);
+    DELAY_US(1000);
+  }
+  
+  // Sort for median
+  for (uint8_t i = 0; i < 7; i++) {
+    for (uint8_t j = 0; j < 7 - i; j++) {
+      if (adc_readings[j] > adc_readings[j + 1]) {
+        uint16_t temp = adc_readings[j];
+        adc_readings[j] = adc_readings[j + 1];
+        adc_readings[j + 1] = temp;
+      }
+    }
+  }
+  uint16_t current_adc = adc_readings[4];
+  current_adc = constrain(current_adc, 0, 2690);
+  
+  float voltage = (current_adc * 3.3f) / 4095.0f;
+  float current_resistance = calculate_resistance(voltage, 4700.0f);
+  float resistance_error = target_resistance - current_resistance;
+  
+  // Check if reached target
+  if (abs(resistance_error) <= resistance_tolerance) {
+    float final_mm = resistance_to_distance(current_resistance);
+    adc_current_position = (int32_t)(final_mm * 400.0f);
+    move_active = false;
+    return MOVE_COMPLETE;
+  }
+  
+  // Check timeout
+  if (iteration >= max_iterations) {
+    move_active = false;
+    return MOVE_ERROR_TIMEOUT;
+  }
+  
+  // Proportional control: move 10-20 steps per call
+  bool direction = resistance_error < 0;
+  uint16_t steps_to_move = min((uint16_t)abs((int32_t)resistance_error / 6), (uint16_t)20);
+  steps_to_move = max(steps_to_move, (uint16_t)1);
+  
+  WRITE(Y_DIR_PIN, direction ? HIGH : LOW);
+  DELAY_US(10);
+  
+  for (uint16_t i = 0; i < steps_to_move; i++) {
+    WRITE(Y_STEP_PIN, HIGH);
+    DELAY_US(500);
+    WRITE(Y_STEP_PIN, LOW);
+    DELAY_US(500);
+    
+    if (i % 10 == 0) hal.watchdog_refresh();
+  }
+  
+  iteration++;
+  hal.watchdog_refresh();
+  
+  return MOVE_IN_PROGRESS;
+}
+
+// Non-blocking relative position movement
+MoveStatus move_relative_mm(float delta_mm) {
+  static bool initialized = false;
+  static float target_mm = 0.0f;
+  
+  if (!initialized) {
+    float current_mm = get_current_position_mm();
+    target_mm = current_mm + delta_mm;
+    
+    // Validate target
+    if (target_mm < 10.0f || target_mm > 80.0f) {
+      initialized = false;
+      return MOVE_ERROR_BOUNDS;
+    }
+    
+    initialized = true;
+  }
+  
+  MoveStatus status = move_to_absolute_mm(target_mm);
+  
+  if (status != MOVE_IN_PROGRESS) {
+    initialized = false; // Reset for next call
+  }
+  
+  return status;
 }
 
 void manual_control_init() {
